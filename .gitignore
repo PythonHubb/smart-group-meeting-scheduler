@@ -1,0 +1,24 @@
+
+# Python virtual environment
+.venv/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Environment variables and secrets
+.env
+.env.*
+
+# Google OAuth credentials and tokens
+credentials.json
+token.json
+
+# Local application data
+data/*.json
+data/*.jsonl
+
+# Editor and system files
+.vscode/
+.DS_Store
+Thumbs.db
