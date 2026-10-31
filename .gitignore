@@ -13,6 +13,7 @@ __pycache__/
 # Google OAuth credentials and tokens
 credentials.json
 token.json
+calendar_token.json
 
 # Local application data
 data/*.json

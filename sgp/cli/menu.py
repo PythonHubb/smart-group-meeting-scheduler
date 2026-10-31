@@ -1,19 +1,17 @@
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from sgp.integrations.google_calendar import create_calendar_event
 from sgp.models import Member, Group
 from sgp.scheduler import suggest_meeting_time, merge_intervals, find_best_weekly_meeting
 from sgp.storage import save_group, load_group
 from sgp.notifications.simulated import notify_group
 from sgp.notifications.telegram_verification import generate_connection_code, verify_telegram_code
 from sgp.validators import is_valid_name, is_valid_email, is_valid_day
-
-
 class CancelOperation(Exception):
     pass
-
-
 class BackOperation(Exception):
     pass
-
-
 def ask(prompt):
     value = input(prompt).strip()
     if value == "0":
@@ -21,8 +19,6 @@ def ask(prompt):
     if value.lower() == "b":
         raise BackOperation
     return value
-
-
 def show_menu():
     print("\n===== Smart Group Project =====")
     print("1. Create Group")
@@ -32,16 +28,12 @@ def show_menu():
     print("5. Save Group")
     print("6. Load Group")
     print("0. Exit")
-
-
 def ask_name():
     while True:
         name = ask("Enter member name (0=Cancel): ")
         if is_valid_name(name):
             return name
         print("Invalid name! Only English letters and spaces, max 20 characters.")
-
-
 def ask_username(group):
     while True:
         username = ask("Enter username (b=Back, 0=Cancel): ")
@@ -51,8 +43,6 @@ def ask_username(group):
             print("This username is already taken!")
         else:
             return username
-
-
 def choose_notification_platforms():
     choices = {"1": "email", "2": "telegram", "3": "whatsapp", "4": "sms"}
     while True:
@@ -62,8 +52,6 @@ def choose_notification_platforms():
         if numbers and all(n in choices for n in numbers):
             return list(dict.fromkeys(choices[n] for n in numbers))
         print("Invalid choice!")
-
-
 def connect_telegram(username):
     print("\nOpen https://t.me/smart_group_meeting_bot and press Start.")
     while True:
@@ -82,8 +70,6 @@ def connect_telegram(username):
         response = ask("1=Retry, b=Back, 0=Cancel, Enter=Skip: ")
         if response != "1":
             return None
-
-
 def get_contact_info(platforms):
     contact_info = {}
     active = []
@@ -130,8 +116,6 @@ def get_contact_info(platforms):
                 contact_info.pop("telegram_username", None)
             print("Returning to previous contact field...")
     return contact_info, active
-
-
 def add_member_flow(group):
     stages = ["name", "username", "platforms", "contacts", "confirm"]
     stage = 0
@@ -173,8 +157,6 @@ def add_member_flow(group):
             else:
                 stage -= 1
                 print("Going back...")
-
-
 def select_member(group):
     while True:
         name = ask("Member name (b=Back, 0=Cancel): ")
@@ -193,16 +175,12 @@ def select_member(group):
         if selected:
             return selected
         print("Username not found!")
-
-
 def ask_day(prompt):
     while True:
         day = ask(prompt)
         if is_valid_day(day):
             return day.capitalize()
         print("Invalid day! Use Monday through Sunday.")
-
-
 def collect_slots():
     slots = []
     while True:
@@ -224,8 +202,6 @@ def collect_slots():
             continue
         slots.append((start, end))
         print("Time slot added.")
-
-
 def show_availability(member):
     print(f"\nAvailability for {member.name} (@{member.username}):")
     if not any(member.availability.values()):
@@ -237,6 +213,67 @@ def show_availability(member):
         if slots:
             print(f"{day}: " + ", ".join(f"{start}:00-{end}:00" for start, end in slots))
 
+
+def offer_calendar_event(group, day, meeting_time):
+    """Optionally create a calendar event for the next matching weekday."""
+    try:
+        answer = ask("Add this meeting to Google Calendar? (y/n, b=Back, 0=Cancel): ").lower()
+        if answer != "y":
+            return
+
+        start_hour, end_hour = meeting_time
+        weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        while True:
+            today = date.today()
+            days_ahead = (weekdays.index(day) - today.weekday()) % 7
+            suggested_date = today + timedelta(days=days_ahead)
+            raw_date = ask(
+                f"Meeting date YYYY-MM-DD (suggested {suggested_date}; b=Back, 0=Cancel): "
+            )
+            if not raw_date:
+                raw_date = suggested_date.isoformat()
+            try:
+                meeting_date = date.fromisoformat(raw_date)
+            except ValueError:
+                print("Invalid date. Use YYYY-MM-DD.")
+                continue
+            if meeting_date.weekday() != weekdays.index(day):
+                print(f"The selected date must be a {day}.")
+                continue
+            if meeting_date < today:
+                print("Please choose a future meeting date.")
+                continue
+            break
+
+        while True:
+            timezone = ask("Time zone (e.g. Europe/Istanbul; b=Back, 0=Cancel): ")
+            if not timezone:
+                print("Time zone is required.")
+                continue
+            try:
+                ZoneInfo(timezone)
+                break
+            except (ZoneInfoNotFoundError, ValueError):
+                print("Invalid time zone. Example: Europe/Istanbul")
+
+        local_start = datetime.combine(meeting_date, datetime.min.time()).replace(
+            hour=start_hour, tzinfo=ZoneInfo(timezone)
+        )
+        if local_start <= datetime.now(ZoneInfo(timezone)):
+            print("That meeting time has already passed in the selected time zone.")
+            return
+        print(f"Calendar event: {group.name} | {meeting_date} | {start_hour}:00-{end_hour}:00 | {timezone}")
+        confirmation = ask("Create this Google Calendar event? (y/n, b=Back, 0=Cancel): ").lower()
+        if confirmation == "y":
+            create_calendar_event(
+                f"{group.name} - Group Meeting",
+                meeting_date.isoformat(),
+                start_hour,
+                end_hour,
+                timezone=timezone,
+            )
+    except BackOperation:
+        print("Calendar step skipped. Returning to meeting menu...")
 
 def notify_after_availability_change(group):
     if not group.members or not all(m.availability_completed for m in group.members):
@@ -255,8 +292,7 @@ def notify_after_availability_change(group):
         print("Notification process completed!")
     else:
         print("Notification already sent for this meeting!")
-
-
+    offer_calendar_event(group, day, time)
 def manage_availability(group):
     if not group.members:
         print("Please add a member first!")
@@ -332,8 +368,6 @@ def manage_availability(group):
             except BackOperation:
                 print("Returning to main menu...")
                 return
-
-
 def run_menu():
     group = None
     while True:
@@ -391,6 +425,9 @@ def run_menu():
                             print("Notification process completed!")
                     except BackOperation:
                         print("Returning to main menu...")
+                        continue
+                    offer_calendar_event(group, day, best_time)
+
             elif choice == "5":
                 if group is None:
                     print("Please create a group first!")
